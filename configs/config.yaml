@@ -1,0 +1,87 @@
+defaults:
+  - _self_
+  - override hydra/hydra_logging: colorlog
+  - override hydra/job_logging: colorlog
+
+# Model configuration
+model:
+  name: "neulab/Pangea-7B"
+  max_length: 2048
+  use_flash_attention: true
+  load_in_8bit: true
+  torch_dtype: "bfloat16"
+  vision_model: "microsoft/git-base-patch16-224"  # Vision encoder for images
+  patch_size: 16  # GIT base uses 16x16 patches
+  use_original_size: true  # Use original 1800x68 images
+
+# LoRA configuration
+lora:
+  r: 16
+  lora_alpha: 32
+  target_modules: ["q_proj", "v_proj", "k_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
+  lora_dropout: 0.1
+  bias: "none"
+  task_type: "CAUSAL_LM"
+
+# Data configuration for HTR
+data:
+  dataset_path: "/scratch/tathagata.ghosh/datasets/1MSharada"
+  output_path: "/scratch/tathagata.ghosh/sharada_finetune/data"
+  train_split: 0.95
+  val_split: 0.05
+  max_samples: 10000  # For overfitting, use smaller subset
+  text_field: "original_text"  # Ground truth text
+  image_field: "image_path"    # Path to manuscript image
+  prompt_template: "Below is a Sharada manuscript image. The text reads:\n\n{text}\n\n"
+  max_seq_length: 1024
+  image_size: [1800, 68]  # Original manuscript image dimensions
+  use_original_size: true  # Don't resize, use original dimensions
+  use_augmentation: true
+
+# Training configuration
+trainer:
+  max_epochs: 10
+  gradient_clip_val: 1.0
+  accumulate_grad_batches: 4
+  precision: "16-mixed"
+  accelerator: "gpu"
+  devices: 1
+  strategy: "auto"
+  log_every_n_steps: 10
+  val_check_interval: 0.25
+  save_top_k: 3
+  monitor: "val_loss"
+  mode: "min"
+  batch_size: 1  # Smaller batch size for large images
+
+# Optimizer configuration
+optimizer:
+  name: "adamw"
+  lr: 2e-4
+  weight_decay: 0.01
+  warmup_steps: 100
+  lr_scheduler: "cosine"
+
+# Logging configuration
+logging:
+  project: "sharada-htr-finetune"
+  name: "qwen-pangea-overfit-experiment"
+  log_model: true
+  save_dir: "/scratch/tathagata.ghosh/sharada_finetune/logs"
+  use_wandb: true  # Enable WandB logging
+  wandb_entity: null  # Set your WandB username if needed
+
+# Metrics configuration
+metrics:
+  log_cer: true  # Log Character Error Rate
+  log_wer: true  # Log Word Error Rate
+  log_bleu: true  # Log BLEU score
+  cer_samples: 100  # Number of samples to compute CER on during validation
+
+# Checkpoint configuration
+checkpoint:
+  dirpath: "/scratch/tathagata.ghosh/sharada_finetune/checkpoints"
+  filename: "sharada-htr-{epoch:02d}-{val_loss:.4f}-{val_cer:.4f}"
+
+# Seed for reproducibility
+seed: 42
