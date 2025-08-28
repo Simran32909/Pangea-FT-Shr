@@ -106,3 +106,5 @@ coverage.xml
 *.cover
 .hypothesis/
 .pytest_cache/
+requirements.txt
+run_training.sh
