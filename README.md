@@ -28,12 +28,12 @@ Key settings in `configs/config.yaml`:
 
 ```yaml
 data:
-  max_samples: 10000      # Number of samples for training
+  max_samples: 100000      # Number of samples for training
   image_size: [1800, 68]  # Original image dimensions
 
 trainer:
   max_epochs: 10
-  batch_size: 1           # For large images
+  batch_size: 256           # For large images
 
 logging:
   use_wandb: true         # Enable WandB logging

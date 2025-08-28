@@ -90,27 +90,31 @@ class SharadaHTRDatasetProcessor:
                 if not text or not text.strip():
                     continue
                 
-                # Get image path
-                image_path = item.get(self.image_field, "")
-                if not image_path:
-                    # Try to construct image path from JSON path
-                    json_dir = os.path.dirname(json_file)
-                    json_name = os.path.splitext(os.path.basename(json_file))[0]
-                    image_path = os.path.join(json_dir, f"{json_name}.jpeg")
+                # Get image path - construct from JSON file location
+                json_dir = os.path.dirname(json_file)
+                json_name = os.path.splitext(os.path.basename(json_file))[0]
+                image_path = os.path.join(json_dir, f"{json_name}.jpeg")
                 
                 # Check if image exists
                 if not os.path.exists(image_path):
                     logger.warning(f"Image not found: {image_path}")
                     continue
                 
-                # Verify image dimensions
+                # Load and resize image if needed
                 try:
                     with Image.open(image_path) as img:
                         width, height = img.size
-                        if width != 1800 or height != 68:
-                            logger.warning(f"Image {image_path} has unexpected dimensions: {width}x{height}")
+                        
+                        # Resize if dimensions don't match expected size
+                        if width != self.image_size[0] or height != self.image_size[1]:
+                            logger.info(f"Resizing image {image_path} from {width}x{height} to {self.image_size[0]}x{self.image_size[1]}")
+                            img = img.resize(self.image_size, Image.Resampling.LANCZOS)
+                        
+                        # Save resized image back to the same location
+                        img.save(image_path, 'JPEG', quality=95)
+                        
                 except Exception as e:
-                    logger.warning(f"Error checking image {image_path}: {e}")
+                    logger.warning(f"Error processing image {image_path}: {e}")
                     continue
                 
                 # Create formatted text with prompt template
@@ -181,8 +185,8 @@ class SharadaHTRDatasetProcessor:
             'text_field': self.text_field,
             'image_field': self.image_field,
             'prompt_template': self.prompt_template,
-            'image_size': self.image_size,
-            'use_original_size': self.use_original_size,
+            'image_size': list(self.image_size) if hasattr(self.image_size, '__iter__') else self.image_size,
+            'use_original_size': getattr(self, 'use_original_size', True),
             'patches': f"{self.image_size[0]//16}x{self.image_size[1]//16} = {(self.image_size[0]//16) * (self.image_size[1]//16)} patches"
         }
         

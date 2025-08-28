@@ -11,7 +11,7 @@ model:
   load_in_8bit: true
   torch_dtype: "bfloat16"
   vision_model: "microsoft/git-base-patch16-224"  # Vision encoder for images
-  patch_size: 16  # GIT base uses 16x16 patches
+  patch_size:   # GIT base uses 16x16 patches
   use_original_size: true  # Use original 1800x68 images
 
 # LoRA configuration
@@ -26,17 +26,17 @@ lora:
 # Data configuration for HTR
 data:
   dataset_path: "/scratch/tathagata.ghosh/datasets/1MSharada"
-  output_path: "/scratch/tathagata.ghosh/sharada_finetune/data"
-  train_split: 0.95
-  val_split: 0.05
-  max_samples: 10000  # For overfitting, use smaller subset
+  output_path: "/scratch/tathagata.ghosh/Pangea_Finetuning/data"
+  train_split: 0.90
+  val_split: 0.10
+  max_samples: 100000  # For overfitting, use smaller subset
   text_field: "original_text"  # Ground truth text
   image_field: "image_path"    # Path to manuscript image
   prompt_template: "Below is a Sharada manuscript image. The text reads:\n\n{text}\n\n"
-  max_seq_length: 1024
+  max_seq_length: 512
   image_size: [1800, 68]  # Original manuscript image dimensions
   use_original_size: true  # Don't resize, use original dimensions
-  use_augmentation: true
+  use_augmentation: false
 
 # Training configuration
 trainer:
@@ -45,19 +45,19 @@ trainer:
   accumulate_grad_batches: 4
   precision: "16-mixed"
   accelerator: "gpu"
-  devices: 1
+  devices: 2
   strategy: "auto"
   log_every_n_steps: 10
-  val_check_interval: 0.25
+  val_check_interval: 0.5
   save_top_k: 3
-  monitor: "val_loss"
+  monitor: "val_cer"
   mode: "min"
-  batch_size: 1  # Smaller batch size for large images
+  batch_size: 32  # Smaller batch size for large images
 
 # Optimizer configuration
 optimizer:
   name: "adamw"
-  lr: 2e-4
+  lr: 1e-6
   weight_decay: 0.01
   warmup_steps: 100
   lr_scheduler: "cosine"
@@ -67,7 +67,7 @@ logging:
   project: "sharada-htr-finetune"
   name: "qwen-pangea-overfit-experiment"
   log_model: true
-  save_dir: "/scratch/tathagata.ghosh/sharada_finetune/logs"
+  save_dir: "/scratch/tathagata.ghosh/Pangea_Finetuning/logs"
   use_wandb: true  # Enable WandB logging
   wandb_entity: null  # Set your WandB username if needed
 
@@ -80,7 +80,7 @@ metrics:
 
 # Checkpoint configuration
 checkpoint:
-  dirpath: "/scratch/tathagata.ghosh/sharada_finetune/checkpoints"
+  dirpath: "/scratch/tathagata.ghosh/Pangea_Finetuning/checkpoints"
   filename: "sharada-htr-{epoch:02d}-{val_loss:.4f}-{val_cer:.4f}"
 
 # Seed for reproducibility
