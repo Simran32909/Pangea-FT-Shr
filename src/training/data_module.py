@@ -7,8 +7,11 @@ from typing import Optional, Dict, Any
 import logging
 from PIL import Image
 import os
+from rich.progress import Progress, TextColumn, BarColumn, TaskProgressColumn, TimeRemainingColumn
+from rich.console import Console
 
 logger = logging.getLogger(__name__)
+console = Console()
 
 class SharadaHTRDataModule(pl.LightningDataModule):
     """PyTorch Lightning DataModule for Sharada HTR dataset."""
@@ -72,26 +75,38 @@ class SharadaHTRDataModule(pl.LightningDataModule):
             
             # Load and process images at original size
             images = []
-            for image_path in examples['image_path']:
-                try:
-                    image = Image.open(image_path).convert('RGB')
+            
+            with Progress(
+                TextColumn("[bold green]{task.description}"),
+                BarColumn(),
+                TaskProgressColumn(),
+                TimeRemainingColumn(),
+                console=console
+            ) as progress:
+                task = progress.add_task("Processing images", total=len(examples['image_path']))
+                
+                for image_path in examples['image_path']:
+                    try:
+                        image = Image.open(image_path).convert('RGB')
+                        
+                        # Verify dimensions
+                        width, height = image.size
+                        if width != 1800 or height != 68:
+                            logger.warning(f"Image {image_path} has unexpected dimensions: {width}x{height}")
+                        
+                        # Process image using vision processor (will handle original size)
+                        # The processor should be able to handle variable input sizes
+                        processed = self.processor(images=image, return_tensors="pt")
+                        images.append(processed['pixel_values'].squeeze(0))
+                        
+                    except Exception as e:
+                        logger.warning(f"Error loading image {image_path}: {e}")
+                        # Create a dummy image tensor if loading fails
+                        # Use the original size for dummy
+                        dummy_image = torch.zeros(3, 68, 1800)  # Original size
+                        images.append(dummy_image)
                     
-                    # Verify dimensions
-                    width, height = image.size
-                    if width != 1800 or height != 68:
-                        logger.warning(f"Image {image_path} has unexpected dimensions: {width}x{height}")
-                    
-                    # Process image using vision processor (will handle original size)
-                    # The processor should be able to handle variable input sizes
-                    processed = self.processor(images=image, return_tensors="pt")
-                    images.append(processed['pixel_values'].squeeze(0))
-                    
-                except Exception as e:
-                    logger.warning(f"Error loading image {image_path}: {e}")
-                    # Create a dummy image tensor if loading fails
-                    # Use the original size for dummy
-                    dummy_image = torch.zeros(3, 68, 1800)  # Original size
-                    images.append(dummy_image)
+                    progress.advance(task)
             
             tokenized['images'] = images
             

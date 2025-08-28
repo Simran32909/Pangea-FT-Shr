@@ -12,6 +12,7 @@ from omegaconf import DictConfig
 import pytorch_lightning as pl
 from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor
 from pytorch_lightning.loggers import WandbLogger, TensorBoardLogger
+from pytorch_lightning.callbacks import RichProgressBar
 import logging
 import torch
 
@@ -75,6 +76,9 @@ def main(cfg: DictConfig):
     # Learning rate monitor
     lr_monitor = LearningRateMonitor(logging_interval='step')
     callbacks.append(lr_monitor)
+
+    # Rich progress bar
+    callbacks.append(RichProgressBar())
     
     # Setup loggers
     loggers = []
@@ -112,6 +116,7 @@ def main(cfg: DictConfig):
         val_check_interval=cfg.trainer.val_check_interval,
         callbacks=callbacks,
         logger=loggers,
+        enable_progress_bar=True,
         deterministic=False,  # Set to True for exact reproducibility
     )
     

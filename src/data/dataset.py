@@ -4,13 +4,15 @@ import glob
 from typing import List, Dict, Any, Optional
 from datasets import Dataset, DatasetDict
 import pandas as pd
-from tqdm import tqdm
+from rich.progress import Progress, TextColumn, BarColumn, TaskProgressColumn, TimeRemainingColumn
+from rich.console import Console
 import logging
 from PIL import Image
 import torch
 from torchvision import transforms
 
 logger = logging.getLogger(__name__)
+console = Console()
 
 class SharadaHTRDatasetProcessor:
     """Process Sharada HTR dataset from JSON files and images to HuggingFace Dataset format."""
@@ -80,60 +82,73 @@ class SharadaHTRDatasetProcessor:
         """Load and process JSON files with corresponding images into a list of dictionaries."""
         data = []
         
-        for json_file in tqdm(json_files, desc="Loading JSON files"):
-            try:
-                with open(json_file, 'r', encoding='utf-8') as f:
-                    item = json.load(f)
-                
-                # Extract text based on specified field
-                text = item.get(self.text_field, "")
-                if not text or not text.strip():
-                    continue
-                
-                # Get image path - construct from JSON file location
-                json_dir = os.path.dirname(json_file)
-                json_name = os.path.splitext(os.path.basename(json_file))[0]
-                image_path = os.path.join(json_dir, f"{json_name}.jpeg")
-                
-                # Check if image exists
-                if not os.path.exists(image_path):
-                    logger.warning(f"Image not found: {image_path}")
-                    continue
-                
-                # Load and resize image if needed
+        with Progress(
+            TextColumn("[bold blue]{task.description}"),
+            BarColumn(),
+            TaskProgressColumn(),
+            TimeRemainingColumn(),
+            console=console
+        ) as progress:
+            task = progress.add_task("Loading JSON files", total=len(json_files))
+            
+            for json_file in json_files:
                 try:
-                    with Image.open(image_path) as img:
-                        width, height = img.size
-                        
-                        # Resize if dimensions don't match expected size
-                        if width != self.image_size[0] or height != self.image_size[1]:
-                            logger.info(f"Resizing image {image_path} from {width}x{height} to {self.image_size[0]}x{self.image_size[1]}")
-                            img = img.resize(self.image_size, Image.Resampling.LANCZOS)
-                        
-                        # Save resized image back to the same location
-                        img.save(image_path, 'JPEG', quality=95)
-                        
+                    with open(json_file, 'r', encoding='utf-8') as f:
+                        item = json.load(f)
+                    
+                    # Extract text based on specified field
+                    text = item.get(self.text_field, "")
+                    if not text or not text.strip():
+                        progress.advance(task)
+                        continue
+                    
+                    # Get image path - construct from JSON file location
+                    json_dir = os.path.dirname(json_file)
+                    json_name = os.path.splitext(os.path.basename(json_file))[0]
+                    image_path = os.path.join(json_dir, f"{json_name}.jpeg")
+                    
+                    # Check if image exists
+                    if not os.path.exists(image_path):
+                        logger.warning(f"Image not found: {image_path}")
+                        progress.advance(task)
+                        continue
+                    
+                    # Load and resize image if needed
+                    try:
+                        with Image.open(image_path) as img:
+                            width, height = img.size
+                            
+                            # Resize if dimensions don't match expected size
+                            if width != self.image_size[0] or height != self.image_size[1]:
+                                logger.info(f"Resizing image {image_path} from {width}x{height} to {self.image_size[0]}x{self.image_size[1]}")
+                                img = img.resize(self.image_size, Image.Resampling.LANCZOS)
+                            
+                            # Save resized image back to the same location
+                            img.save(image_path, 'JPEG', quality=95)
+                            
+                    except Exception as e:
+                        logger.warning(f"Error processing image {image_path}: {e}")
+                        progress.advance(task)
+                        continue
+                    
+                    # Create formatted text with prompt template
+                    formatted_text = self.prompt_template.format(text=text.strip())
+                    
+                    data.append({
+                        'id': item.get('id', ''),
+                        'text': formatted_text,
+                        'original_text': text.strip(),
+                        'image_path': image_path,
+                        'font': item.get('font', ''),
+                        'font_size': item.get('font_size', 0),
+                        'text_source': item.get('text_source', ''),
+                        'WX': item.get('WX', ''),  # Keep transliteration for reference
+                    })
+                    
                 except Exception as e:
-                    logger.warning(f"Error processing image {image_path}: {e}")
-                    continue
+                    logger.warning(f"Error loading {json_file}: {e}")
                 
-                # Create formatted text with prompt template
-                formatted_text = self.prompt_template.format(text=text.strip())
-                
-                data.append({
-                    'id': item.get('id', ''),
-                    'text': formatted_text,
-                    'original_text': text.strip(),
-                    'image_path': image_path,
-                    'font': item.get('font', ''),
-                    'font_size': item.get('font_size', 0),
-                    'text_source': item.get('text_source', ''),
-                    'WX': item.get('WX', ''),  # Keep transliteration for reference
-                })
-                
-            except Exception as e:
-                logger.warning(f"Error loading {json_file}: {e}")
-                continue
+                progress.advance(task)
         
         return data
     
