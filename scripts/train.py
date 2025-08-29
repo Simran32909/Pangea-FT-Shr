@@ -34,15 +34,20 @@ def main(cfg: DictConfig):
     logger.info("Starting HTR training...")
     logger.info(f"Configuration: {cfg}")
     
+    # Sanity: verify dataset path
+    if not os.path.exists(cfg.data.output_path):
+        raise FileNotFoundError(f"Processed dataset not found at {cfg.data.output_path}. Run scripts/prepare_data.py first.")
+    
     # Load processed dataset
     logger.info("Loading processed HTR dataset...")
     dataset = load_processed_dataset(cfg.data.output_path)
+    train_len, val_len = len(dataset["train"]), len(dataset["validation"])
+    logger.info(f"Dataset sizes => train: {train_len}, val: {val_len}")
     
     # Initialize data module
     data_module = SharadaHTRDataModule(
         dataset=dataset,
         tokenizer_name=cfg.model.name,
-        vision_model_name=cfg.model.vision_model,
         max_seq_length=cfg.data.max_seq_length,
         batch_size=cfg.trainer.get("batch_size", 1),
         num_workers=cfg.trainer.get("num_workers", 4)
@@ -52,12 +57,32 @@ def main(cfg: DictConfig):
     logger.info("Initializing HTR model...")
     model = PangeaHTRModel(
         model_name=cfg.model.name,
-        vision_model_name=cfg.model.vision_model,
         lora_config=cfg.lora,
         model_config=cfg.model,
         optimizer_config=cfg.optimizer,
         metrics_config=cfg.metrics
     )
+    
+    # Preflight sanity check: run one batch forward
+    try:
+        logger.info("Running preflight sanity check (single batch forward)...")
+        data_module.setup(stage="fit")
+        dl = data_module.train_dataloader()
+        batch = next(iter(dl))
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        model = model.to(device)
+        batch = {k: (v.to(device) if torch.is_tensor(v) else v) for k, v in batch.items()}
+        with torch.no_grad():
+            out = model(
+                input_ids=batch['input_ids'],
+                attention_mask=batch['attention_mask'],
+                labels=batch['labels'],
+                images=batch.get('images', None)
+            )
+        logger.info(f"Sanity check OK. Loss tensor shape: {out.loss.shape if hasattr(out,'loss') else 'n/a'}")
+    except Exception as e:
+        logger.exception(f"Sanity check failed: {e}")
+        raise
     
     # Setup callbacks
     callbacks = []
