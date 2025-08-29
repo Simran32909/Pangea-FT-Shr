@@ -61,7 +61,6 @@ tensorboard_logs/
 
 # Checkpoints and models
 checkpoints/
-models/
 outputs/
 runs/
 
