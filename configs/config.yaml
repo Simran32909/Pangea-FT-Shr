@@ -6,13 +6,13 @@ defaults:
 # Model configuration
 model:
   name: "neulab/Pangea-7B"
-  max_length: 2048
+  max_length: 512
   use_flash_attention: true
-  load_in_8bit: true
+  load_in_8bit: false
+  load_in_4bit: true
   torch_dtype: "bfloat16"
-  vision_model: "microsoft/git-base-patch16-224"  # Vision encoder for images
-  patch_size:   # GIT base uses 16x16 patches
   use_original_size: true  # Use original 1800x68 images
+  gradient_checkpointing: true
 
 # LoRA configuration
 lora:
@@ -27,8 +27,8 @@ lora:
 data:
   dataset_path: "/scratch/tathagata.ghosh/datasets/1MSharada"
   output_path: "/scratch/tathagata.ghosh/Pangea_Finetuning/data"
-  train_split: 0.90
-  val_split: 0.10
+  train_split: 0.9
+  val_split: 0.1
   max_samples: 100000  # For overfitting, use smaller subset
   text_field: "original_text"  # Ground truth text
   image_field: "image_path"    # Path to manuscript image
@@ -42,22 +42,22 @@ data:
 trainer:
   max_epochs: 10
   gradient_clip_val: 1.0
-  accumulate_grad_batches: 4
+  accumulate_grad_batches: 16
   precision: "16-mixed"
   accelerator: "gpu"
-  devices: 2
+  devices: 1
   strategy: "auto"
   log_every_n_steps: 10
   val_check_interval: 0.5
   save_top_k: 3
   monitor: "val_cer"
   mode: "min"
-  batch_size: 32  # Smaller batch size for large images
+  batch_size: 10  # Small micro-batch; use grad accumulation for effective batch
 
 # Optimizer configuration
 optimizer:
   name: "adamw"
-  lr: 1e-6
+  lr: 2e-4
   weight_decay: 0.01
   warmup_steps: 100
   lr_scheduler: "cosine"
