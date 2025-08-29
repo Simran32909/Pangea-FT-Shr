@@ -19,7 +19,6 @@ class PangeaHTRModel(pl.LightningModule):
     
     def __init__(self, 
                  model_name: str = "neulab/Pangea-7B",
-                 vision_model_name: str = "microsoft/git-base",
                  lora_config: Dict[str, Any] = None,
                  model_config: Dict[str, Any] = None,
                  optimizer_config: Dict[str, Any] = None,
@@ -28,7 +27,6 @@ class PangeaHTRModel(pl.LightningModule):
         self.save_hyperparameters()
         
         self.model_name = model_name
-        self.vision_model_name = vision_model_name
         self.lora_config = lora_config or {}
         self.model_config = model_config or {}
         self.optimizer_config = optimizer_config or {}
@@ -56,12 +54,22 @@ class PangeaHTRModel(pl.LightningModule):
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
         
-        # Load vision processor
-        self.processor = AutoProcessor.from_pretrained(self.vision_model_name)
+        # Load processor from the same multimodal Pangea model (built-in vision)
+        try:
+            self.processor = AutoProcessor.from_pretrained(self.model_name, use_fast=True)
+        except Exception:
+            self.processor = None
         
-        # Quantization config for 8-bit loading
+        # Quantization config (prefer 4-bit QLoRA if enabled, else 8-bit, else None)
         quantization_config = None
-        if self.model_config.get("load_in_8bit", False):
+        if self.model_config.get("load_in_4bit", False):
+            quantization_config = BitsAndBytesConfig(
+                load_in_4bit=True,
+                bnb_4bit_quant_type="nf4",
+                bnb_4bit_use_double_quant=True,
+                bnb_4bit_compute_dtype=torch.float16,
+            )
+        elif self.model_config.get("load_in_8bit", False):
             quantization_config = BitsAndBytesConfig(
                 load_in_8bit=True,
                 llm_int8_threshold=6.0,
@@ -76,13 +84,16 @@ class PangeaHTRModel(pl.LightningModule):
             trust_remote_code=True,
             device_map="auto" if quantization_config else None,
         )
+
+        # Enable gradient checkpointing if requested
+        if self.model_config.get("gradient_checkpointing", False):
+            try:
+                self.model.gradient_checkpointing_enable()
+            except Exception:
+                pass
         
-        # Load vision encoder
-        self.vision_encoder = AutoModelForCausalLM.from_pretrained(
-            self.vision_model_name,
-            torch_dtype=getattr(torch, self.model_config.get("torch_dtype", "bfloat16")),
-            trust_remote_code=True,
-        )
+        # Do not load a separate vision encoder; Pangea is assumed multimodal
+        self.vision_encoder = None
         
         # Apply LoRA to language model
         if self.lora_config:
@@ -108,37 +119,26 @@ class PangeaHTRModel(pl.LightningModule):
         self.model.print_trainable_parameters()
     
     def encode_images(self, images):
-        """Encode images using the vision encoder."""
-        # Process images through vision encoder
-        vision_outputs = self.vision_encoder(images, output_hidden_states=True)
-        # Use the last hidden state as image features
-        image_features = vision_outputs.hidden_states[-1]
-        return image_features
+        """Placeholder retained for compatibility; not used when using Pangea's built-in vision."""
+        return images
     
     def forward(self, input_ids, attention_mask=None, labels=None, images=None):
         """Forward pass through the model with optional image input."""
-        if images is not None:
-            # Encode images
-            image_features = self.encode_images(images)
-            # Concatenate image features with text embeddings
-            # This is a simplified approach - you might need to adapt based on model architecture
-            batch_size = input_ids.shape[0]
-            image_seq_len = image_features.shape[1]
-            
-            # Extend attention mask for image tokens
-            if attention_mask is not None:
-                image_attention_mask = torch.ones(batch_size, image_seq_len, device=attention_mask.device)
-                attention_mask = torch.cat([image_attention_mask, attention_mask], dim=1)
-            
-            # For now, we'll use a simple approach - you may need to modify based on model specifics
-            # This is a placeholder for the actual vision-language integration
-            pass
-        
-        outputs = self.model(
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            labels=labels
-        )
+        # Route images directly to the multimodal model if supported
+        try:
+            outputs = self.model(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                labels=labels,
+                images=images
+            )
+        except TypeError:
+            # Fallback: models that don't accept images will ignore them
+            outputs = self.model(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                labels=labels
+            )
         return outputs
     
     def calculate_cer(self, predictions, targets):
@@ -246,6 +246,26 @@ class PangeaHTRModel(pl.LightningModule):
         
         loss = outputs.loss
         self.log('train_loss', loss, prog_bar=True, sync_dist=True)
+        
+        # Optionally log train CER/metrics at a reduced frequency to avoid overhead
+        try:
+            if self.metrics_config.get("log_cer", False) and (batch_idx % 200 == 0):
+                # Generate predictions (best-effort, lightweight sampling)
+                predictions = self.generate_text_from_batch(batch)
+                  = []
+                for text in batch.get('original_text', []):
+                    targets.append(text if isinstance(text, str) else "")
+                if predictions and targets:
+                    cer = self.calculate_cer(predictions, targets)
+                    self.log('train_cer', cer, prog_bar=False, sync_dist=True)
+                    if self.metrics_config.get("log_wer", False):
+                        wer_score = self.calculate_wer(predictions, targets)
+                        self.log('train_wer', wer_score, sync_dist=True)
+                    if self.metrics_config.get("log_bleu", False):
+                        bleu_score = self.calculate_bleu(predictions, targets)
+                        self.log('train_bleu', bleu_score, sync_dist=True)
+        except Exception as e:
+            logger.warning(f"Error calculating train metrics: {e}")
         
         return loss
     

@@ -213,4 +213,12 @@ class SharadaHTRDatasetProcessor:
 
 def load_processed_dataset(data_path: str) -> DatasetDict:
     """Load a previously processed dataset from disk."""
-    return DatasetDict.load_from_disk(data_path)
+    # Normalize path and ensure fsspec recognizes local protocol
+    if not isinstance(data_path, str):
+        data_path = str(data_path)
+    abs_path = os.path.abspath(data_path)
+    if abs_path.startswith("/"):
+        load_path = f"file://{abs_path}"
+    else:
+        load_path = abs_path
+    return DatasetDict.load_from_disk(load_path)
