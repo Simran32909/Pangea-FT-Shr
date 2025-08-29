@@ -2,10 +2,12 @@ import pytorch_lightning as pl
 from torch.utils.data import DataLoader
 from datasets import DatasetDict
 from transformers import AutoTokenizer, AutoProcessor
+import numpy as np
 import torch
 from typing import Optional, Dict, Any
 import logging
 from PIL import Image
+import torchvision.io as tvio
 import os
 from rich.progress import Progress, TextColumn, BarColumn, TaskProgressColumn, TimeRemainingColumn
 from rich.console import Console
@@ -19,15 +21,13 @@ class SharadaHTRDataModule(pl.LightningDataModule):
     def __init__(self, 
                  dataset: DatasetDict,
                  tokenizer_name: str = "neulab/Pangea-7B",
-                 vision_model_name: str = "microsoft/git-base-patch16-224",
                  max_seq_length: int = 1024,
-                 batch_size: int = 1,
-                 num_workers: int = 4):
+                 batch_size: int = 8,
+                 num_workers: int = 8):
         super().__init__()
         
         self.dataset = dataset
         self.tokenizer_name = tokenizer_name
-        self.vision_model_name = vision_model_name
         self.max_seq_length = max_seq_length
         self.batch_size = batch_size
         self.num_workers = num_workers
@@ -48,7 +48,16 @@ class SharadaHTRDataModule(pl.LightningDataModule):
                 self.tokenizer.pad_token = self.tokenizer.eos_token
         
         if self.processor is None:
-            self.processor = AutoProcessor.from_pretrained(self.vision_model_name)
+            # Try to load a processor that actually supports images; otherwise leave as None
+            proc = None
+            try:
+                proc = AutoProcessor.from_pretrained(self.tokenizer_name)
+            except Exception:
+                proc = None
+            # Some models return a tokenizer from AutoProcessor; ensure it has image support
+            if proc is not None and not (hasattr(proc, "image_processor") or hasattr(proc, "feature_extractor")):
+                proc = None
+            self.processor = proc
         
         # Tokenize datasets
         if stage == "fit" or stage is None:
@@ -59,11 +68,11 @@ class SharadaHTRDataModule(pl.LightningDataModule):
             self.test_dataset = self.process_dataset(self.dataset['validation'])  # Use val as test
     
     def process_dataset(self, dataset):
-        """Process a dataset with both text tokenization and image loading."""
+        """Process a dataset with text tokenization only; defer image I/O to collate_fn."""
         def process_function(examples):
             # Tokenize the texts
             tokenized = self.tokenizer(
-                examples['text'],
+                examples['original_text'],
                 truncation=True,
                 padding=False,
                 max_length=self.max_seq_length,
@@ -73,42 +82,10 @@ class SharadaHTRDataModule(pl.LightningDataModule):
             # Create labels (same as input_ids for causal LM)
             tokenized['labels'] = tokenized['input_ids'].copy()
             
-            # Load and process images at original size
-            images = []
-            
-            with Progress(
-                TextColumn("[bold green]{task.description}"),
-                BarColumn(),
-                TaskProgressColumn(),
-                TimeRemainingColumn(),
-                console=console
-            ) as progress:
-                task = progress.add_task("Processing images", total=len(examples['image_path']))
-                
-                for image_path in examples['image_path']:
-                    try:
-                        image = Image.open(image_path).convert('RGB')
-                        
-                        # Verify dimensions
-                        width, height = image.size
-                        if width != 1800 or height != 68:
-                            logger.warning(f"Image {image_path} has unexpected dimensions: {width}x{height}")
-                        
-                        # Process image using vision processor (will handle original size)
-                        # The processor should be able to handle variable input sizes
-                        processed = self.processor(images=image, return_tensors="pt")
-                        images.append(processed['pixel_values'].squeeze(0))
-                        
-                    except Exception as e:
-                        logger.warning(f"Error loading image {image_path}: {e}")
-                        # Create a dummy image tensor if loading fails
-                        # Use the original size for dummy
-                        dummy_image = torch.zeros(3, 68, 1800)  # Original size
-                        images.append(dummy_image)
-                    
-                    progress.advance(task)
-            
-            tokenized['images'] = images
+            # Defer image loading; keep paths only for collate-time loading
+            tokenized['image_path'] = examples['image_path']
+            # Keep raw ground-truth for metric computation
+            tokenized['original_text'] = examples['original_text']
             
             return tokenized
         
@@ -162,6 +139,7 @@ class SharadaHTRDataModule(pl.LightningDataModule):
         attention_mask = []
         labels = []
         images = []
+        original_texts = []
         
         for item in batch:
             seq_len = len(item['input_ids'])
@@ -179,12 +157,21 @@ class SharadaHTRDataModule(pl.LightningDataModule):
             padded_labels = item['labels'] + [-100] * padding_len
             labels.append(padded_labels)
             
-            # Stack images
-            images.append(item['images'])
+            # Load image fast via torchvision.io in worker process
+            try:
+                img = tvio.read_image(item['image_path'], mode=tvio.ImageReadMode.RGB)
+                img = img.to(dtype=torch.float32) / 255.0
+            except Exception as e:
+                logger.warning(f"Error reading image {item['image_path']}: {e}")
+                img = torch.zeros(3, 68, 1800, dtype=torch.float32)
+            images.append(img)
+            # Keep original text for CER/WER computation
+            original_texts.append(item.get('original_text', ""))
         
         return {
             'input_ids': torch.tensor(input_ids, dtype=torch.long),
             'attention_mask': torch.tensor(attention_mask, dtype=torch.long),
             'labels': torch.tensor(labels, dtype=torch.long),
             'images': torch.stack(images),
+            'original_text': original_texts,
         }
